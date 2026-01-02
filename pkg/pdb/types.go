@@ -3,25 +3,29 @@ package pdb
 
 // Function represents a function/procedure symbol.
 type Function struct {
-	Name      string `json:"name"`
-	Offset    uint32 `json:"offset"`
-	Segment   uint16 `json:"segment"`
-	Length    uint32 `json:"length"`
-	TypeIndex uint32 `json:"type_index"`
-	Signature string `json:"signature"`
-	IsGlobal  bool   `json:"is_global"`
-	Module    string `json:"module,omitempty"`
+	Name          string `json:"name"`
+	DemangledName string `json:"demangled_name,omitempty"`
+	Offset        uint32 `json:"offset"`
+	Segment       uint16 `json:"segment"`
+	RVA           uint32 `json:"rva"`
+	Length        uint32 `json:"length"`
+	TypeIndex     uint32 `json:"type_index"`
+	Signature     string `json:"signature"`
+	IsGlobal      bool   `json:"is_global"`
+	Module        string `json:"module,omitempty"`
 }
 
 // Variable represents a data/variable symbol.
 type Variable struct {
-	Name      string `json:"name"`
-	Offset    uint32 `json:"offset"`
-	Segment   uint16 `json:"segment"`
-	TypeIndex uint32 `json:"type_index"`
-	TypeName  string `json:"type_name"`
-	IsGlobal  bool   `json:"is_global"`
-	Module    string `json:"module,omitempty"`
+	Name          string `json:"name"`
+	DemangledName string `json:"demangled_name,omitempty"`
+	Offset        uint32 `json:"offset"`
+	Segment       uint16 `json:"segment"`
+	RVA           uint32 `json:"rva"`
+	TypeIndex     uint32 `json:"type_index"`
+	TypeName      string `json:"type_name"`
+	IsGlobal      bool   `json:"is_global"`
+	Module        string `json:"module,omitempty"`
 }
 
 // TypeInfo represents a parsed type.
@@ -43,9 +47,19 @@ type Member struct {
 
 // PublicSymbol represents a public symbol from the public symbol stream.
 type PublicSymbol struct {
-	Name    string `json:"name"`
-	Offset  uint32 `json:"offset"`
-	Segment uint16 `json:"segment"`
+	Name          string `json:"name"`
+	DemangledName string `json:"demangled_name,omitempty"`
+	Offset        uint32 `json:"offset"`
+	Segment       uint16 `json:"segment"`
+	RVA           uint32 `json:"rva"`
+}
+
+// SectionInfo represents a PE section.
+type SectionInfo struct {
+	Index  uint16 `json:"index"`            // 1-based section index
+	Name   string `json:"name,omitempty"`   // Section name (e.g., ".text", ".data")
+	Offset uint32 `json:"offset"`           // Virtual address (RVA base)
+	Length uint32 `json:"length"`           // Section length in bytes
 }
 
 // ModuleInfo represents information about a compiled module.

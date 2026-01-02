@@ -54,7 +54,31 @@ type DBIStream struct {
 	Header          DBIHeader
 	Modules         []ModuleInfo
 	SectionContribs []SectionContrib
+	SectionMap      []SectionMapEntry
+	DebugHeader     *OptionalDebugHeader
 }
+
+// SectionMapHeader precedes the section map entries.
+type SectionMapHeader struct {
+	Count    uint16 // Number of segment descriptors
+	LogCount uint16 // Number of logical segment descriptors
+}
+
+// SectionMapEntry describes a section/segment mapping.
+// This maps PE section numbers to their virtual addresses.
+type SectionMapEntry struct {
+	Flags         uint16 // Descriptor flags
+	Ovl           uint16 // Logical overlay number
+	Group         uint16 // Group index
+	Frame         uint16 // Frame number (segment number in PE)
+	SectionName   uint16 // Offset into /names for section name (-1 if none)
+	ClassName     uint16 // Offset into /names for class name (-1 if none)
+	Offset        uint32 // Byte offset of logical segment within physical segment
+	SectionLength uint32 // Length of segment in bytes
+}
+
+// SectionMapEntry size in bytes
+const SectionMapEntrySize = 20
 
 // ModuleInfo contains information about a compiled module.
 type ModuleInfo struct {
@@ -112,7 +136,7 @@ func ReadDBIStream(data []byte) (*DBIStream, error) {
 	// Calculate substream offsets
 	modInfoOffset := 64
 	secContribOffset := modInfoOffset + int(header.ModInfoSize)
-	// secMapOffset := secContribOffset + int(header.SectionContributionSize)
+	secMapOffset := secContribOffset + int(header.SectionContributionSize)
 	// sourceInfoOffset := secMapOffset + int(header.SectionMapSize)
 
 	// Parse module info substream
@@ -136,6 +160,35 @@ func ReadDBIStream(data []byte) (*DBIStream, error) {
 				return nil, fmt.Errorf("failed to parse section contributions: %w", err)
 			}
 			dbi.SectionContribs = contribs
+		}
+	}
+
+	// Parse section map
+	if header.SectionMapSize > 0 {
+		secMapEnd := secMapOffset + int(header.SectionMapSize)
+		if secMapEnd <= len(data) {
+			sectionMap, err := parseSectionMap(data[secMapOffset:secMapEnd])
+			if err != nil {
+				return nil, fmt.Errorf("failed to parse section map: %w", err)
+			}
+			dbi.SectionMap = sectionMap
+		}
+	}
+
+	// Parse optional debug header
+	if header.OptionalDbgHeaderSize > 0 {
+		// Calculate offset: after all other substreams
+		dbgHeaderOffset := 64 + // DBI header
+			int(header.ModInfoSize) +
+			int(header.SectionContributionSize) +
+			int(header.SectionMapSize) +
+			int(header.SourceInfoSize) +
+			int(header.TypeServerMapSize) +
+			int(header.ECSubstreamSize)
+
+		dbgHeaderEnd := dbgHeaderOffset + int(header.OptionalDbgHeaderSize)
+		if dbgHeaderEnd <= len(data) {
+			dbi.DebugHeader = ParseOptionalDebugHeader(data[dbgHeaderOffset:dbgHeaderEnd])
 		}
 	}
 
@@ -296,6 +349,60 @@ func parseSectionContribs(data []byte) ([]SectionContrib, error) {
 	return contribs, nil
 }
 
+// parseSectionMap parses the section map substream.
+func parseSectionMap(data []byte) ([]SectionMapEntry, error) {
+	if len(data) < 4 {
+		return nil, nil
+	}
+
+	r := bytes.NewReader(data)
+
+	// Read header
+	var header SectionMapHeader
+	if err := binary.Read(r, binary.LittleEndian, &header); err != nil {
+		return nil, fmt.Errorf("failed to read section map header: %w", err)
+	}
+
+	// Validate we have enough data
+	expectedSize := 4 + int(header.Count)*SectionMapEntrySize
+	if len(data) < expectedSize {
+		// Some PDBs have truncated section maps, just parse what we can
+		header.Count = uint16((len(data) - 4) / SectionMapEntrySize)
+	}
+
+	entries := make([]SectionMapEntry, 0, header.Count)
+	for i := uint16(0); i < header.Count; i++ {
+		var entry SectionMapEntry
+		if err := binary.Read(r, binary.LittleEndian, &entry.Flags); err != nil {
+			break
+		}
+		if err := binary.Read(r, binary.LittleEndian, &entry.Ovl); err != nil {
+			break
+		}
+		if err := binary.Read(r, binary.LittleEndian, &entry.Group); err != nil {
+			break
+		}
+		if err := binary.Read(r, binary.LittleEndian, &entry.Frame); err != nil {
+			break
+		}
+		if err := binary.Read(r, binary.LittleEndian, &entry.SectionName); err != nil {
+			break
+		}
+		if err := binary.Read(r, binary.LittleEndian, &entry.ClassName); err != nil {
+			break
+		}
+		if err := binary.Read(r, binary.LittleEndian, &entry.Offset); err != nil {
+			break
+		}
+		if err := binary.Read(r, binary.LittleEndian, &entry.SectionLength); err != nil {
+			break
+		}
+		entries = append(entries, entry)
+	}
+
+	return entries, nil
+}
+
 // MachineTypeName returns the human-readable name for a machine type.
 func MachineTypeName(machine uint16) string {
 	switch machine {
@@ -317,4 +424,88 @@ func MachineTypeName(machine uint16) string {
 // HasSymbols returns true if the module has symbol information.
 func (m *ModuleInfo) HasSymbols() bool {
 	return m.ModuleSymStream != 0xFFFF && m.SymByteSize > 0
+}
+
+// OptionalDebugHeader contains indices to optional debug streams.
+type OptionalDebugHeader struct {
+	FPO              uint16 // FPO data stream
+	Exception        uint16 // Exception data stream
+	Fixup            uint16 // Fixup data stream
+	OmapToSrc        uint16 // Omap to source stream
+	OmapFromSrc      uint16 // Omap from source stream
+	SectionHdr       uint16 // Section header stream index
+	TokenRidMap      uint16 // Token RID map stream
+	Xdata            uint16 // Xdata stream
+	Pdata            uint16 // Pdata stream
+	NewFPO           uint16 // New FPO data stream
+	SectionHdrOrig   uint16 // Original section header stream
+}
+
+// PESectionHeader represents a PE section header from the debug stream.
+type PESectionHeader struct {
+	Name                 [8]byte
+	VirtualSize          uint32
+	VirtualAddress       uint32 // RVA base for this section
+	SizeOfRawData        uint32
+	PointerToRawData     uint32
+	PointerToRelocations uint32
+	PointerToLinenumbers uint32
+	NumberOfRelocations  uint16
+	NumberOfLinenumbers  uint16
+	Characteristics      uint32
+}
+
+// PESectionHeaderSize is the size of a PE section header.
+const PESectionHeaderSize = 40
+
+// ParseOptionalDebugHeader parses the optional debug header from the DBI stream.
+func ParseOptionalDebugHeader(data []byte) *OptionalDebugHeader {
+	if len(data) < 22 { // 11 uint16 fields
+		return nil
+	}
+
+	return &OptionalDebugHeader{
+		FPO:            binary.LittleEndian.Uint16(data[0:]),
+		Exception:      binary.LittleEndian.Uint16(data[2:]),
+		Fixup:          binary.LittleEndian.Uint16(data[4:]),
+		OmapToSrc:      binary.LittleEndian.Uint16(data[6:]),
+		OmapFromSrc:    binary.LittleEndian.Uint16(data[8:]),
+		SectionHdr:     binary.LittleEndian.Uint16(data[10:]),
+		TokenRidMap:    binary.LittleEndian.Uint16(data[12:]),
+		Xdata:          binary.LittleEndian.Uint16(data[14:]),
+		Pdata:          binary.LittleEndian.Uint16(data[16:]),
+		NewFPO:         binary.LittleEndian.Uint16(data[18:]),
+		SectionHdrOrig: binary.LittleEndian.Uint16(data[20:]),
+	}
+}
+
+// ParseSectionHeaders parses PE section headers from a stream.
+func ParseSectionHeaders(data []byte) []PESectionHeader {
+	var headers []PESectionHeader
+	for i := 0; i+PESectionHeaderSize <= len(data); i += PESectionHeaderSize {
+		var hdr PESectionHeader
+		copy(hdr.Name[:], data[i:i+8])
+		hdr.VirtualSize = binary.LittleEndian.Uint32(data[i+8:])
+		hdr.VirtualAddress = binary.LittleEndian.Uint32(data[i+12:])
+		hdr.SizeOfRawData = binary.LittleEndian.Uint32(data[i+16:])
+		hdr.PointerToRawData = binary.LittleEndian.Uint32(data[i+20:])
+		hdr.PointerToRelocations = binary.LittleEndian.Uint32(data[i+24:])
+		hdr.PointerToLinenumbers = binary.LittleEndian.Uint32(data[i+28:])
+		hdr.NumberOfRelocations = binary.LittleEndian.Uint16(data[i+32:])
+		hdr.NumberOfLinenumbers = binary.LittleEndian.Uint16(data[i+34:])
+		hdr.Characteristics = binary.LittleEndian.Uint32(data[i+36:])
+		headers = append(headers, hdr)
+	}
+	return headers
+}
+
+// SectionName returns the section name as a string.
+func (h *PESectionHeader) SectionName() string {
+	// Find null terminator or use full 8 bytes
+	for i, b := range h.Name {
+		if b == 0 {
+			return string(h.Name[:i])
+		}
+	}
+	return string(h.Name[:])
 }

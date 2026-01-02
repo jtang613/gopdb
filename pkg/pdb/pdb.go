@@ -18,16 +18,18 @@ const (
 
 // PDB represents an opened PDB file.
 type PDB struct {
-	msf      *msf.MSF
-	pdbInfo  *streams.PDBInfo
-	tpi      *streams.TPIStream
-	dbi      *streams.DBIStream
-	resolver *codeview.TypeResolver
+	msf            *msf.MSF
+	pdbInfo        *streams.PDBInfo
+	tpi            *streams.TPIStream
+	dbi            *streams.DBIStream
+	resolver       *codeview.TypeResolver
+	sectionHeaders []streams.PESectionHeader
 
 	// Cached results
 	functions []Function
 	variables []Variable
 	publics   []PublicSymbol
+	sections  []SectionInfo
 }
 
 // Open opens a PDB file and parses its core structures.
@@ -66,6 +68,20 @@ func Open(path string) (*PDB, error) {
 			data, err := stream.ReadAll()
 			if err == nil {
 				pdb.dbi, _ = streams.ReadDBIStream(data)
+			}
+		}
+	}
+
+	// Load section headers from optional debug header stream
+	if pdb.dbi != nil && pdb.dbi.DebugHeader != nil {
+		secHdrStream := int(pdb.dbi.DebugHeader.SectionHdr)
+		if secHdrStream != 0xFFFF && m.NumStreams() > secHdrStream {
+			stream, err := m.Stream(secHdrStream)
+			if err == nil && stream.Size() > 0 {
+				data, err := stream.ReadAll()
+				if err == nil {
+					pdb.sectionHeaders = streams.ParseSectionHeaders(data)
+				}
 			}
 		}
 	}
@@ -124,9 +140,13 @@ func (p *PDB) Functions() []Function {
 								Name:      proc.Name,
 								Offset:    proc.Offset,
 								Segment:   proc.Segment,
+								RVA:       p.SegmentToRVA(proc.Segment, proc.Offset),
 								Length:    proc.Length,
 								TypeIndex: proc.TypeIndex,
 								IsGlobal:  codeview.IsGlobalSymbol(sym.Kind),
+							}
+							if demangled := Demangle(proc.Name); demangled != proc.Name {
+								fn.DemangledName = demangled
 							}
 							if p.resolver != nil {
 								fn.Signature = p.resolver.ResolveType(proc.TypeIndex)
@@ -171,10 +191,14 @@ func (p *PDB) Functions() []Function {
 							Name:      proc.Name,
 							Offset:    proc.Offset,
 							Segment:   proc.Segment,
+							RVA:       p.SegmentToRVA(proc.Segment, proc.Offset),
 							Length:    proc.Length,
 							TypeIndex: proc.TypeIndex,
 							IsGlobal:  codeview.IsGlobalSymbol(sym.Kind),
 							Module:    mod.ModuleName,
+						}
+						if demangled := Demangle(proc.Name); demangled != proc.Name {
+							fn.DemangledName = demangled
 						}
 						if p.resolver != nil {
 							fn.Signature = p.resolver.ResolveType(proc.TypeIndex)
@@ -212,8 +236,12 @@ func (p *PDB) Variables() []Variable {
 								Name:      dataSym.Name,
 								Offset:    dataSym.Offset,
 								Segment:   dataSym.Segment,
+								RVA:       p.SegmentToRVA(dataSym.Segment, dataSym.Offset),
 								TypeIndex: dataSym.TypeIndex,
 								IsGlobal:  codeview.IsGlobalSymbol(sym.Kind),
+							}
+							if demangled := Demangle(dataSym.Name); demangled != dataSym.Name {
+								v.DemangledName = demangled
 							}
 							if p.resolver != nil {
 								v.TypeName = p.resolver.ResolveType(dataSym.TypeIndex)
@@ -257,9 +285,13 @@ func (p *PDB) Variables() []Variable {
 							Name:      dataSym.Name,
 							Offset:    dataSym.Offset,
 							Segment:   dataSym.Segment,
+							RVA:       p.SegmentToRVA(dataSym.Segment, dataSym.Offset),
 							TypeIndex: dataSym.TypeIndex,
 							IsGlobal:  codeview.IsGlobalSymbol(sym.Kind),
 							Module:    mod.ModuleName,
+						}
+						if demangled := Demangle(dataSym.Name); demangled != dataSym.Name {
+							v.DemangledName = demangled
 						}
 						if p.resolver != nil {
 							v.TypeName = p.resolver.ResolveType(dataSym.TypeIndex)
@@ -282,34 +314,26 @@ func (p *PDB) PublicSymbols() []PublicSymbol {
 
 	p.publics = make([]PublicSymbol, 0)
 
-	if p.dbi != nil && p.dbi.Header.PublicStreamIndex != 0xFFFF {
-		stream, err := p.msf.Stream(int(p.dbi.Header.PublicStreamIndex))
+	if p.dbi != nil && p.dbi.Header.SymRecordStream != 0xFFFF {
+		stream, err := p.msf.Stream(int(p.dbi.Header.SymRecordStream))
 		if err == nil && stream.Size() > 0 {
 			data, err := stream.ReadAll()
 			if err == nil {
-				// Public stream has a header we need to skip
-				// The actual symbols are in the symbol record stream
-				_ = data
-			}
-		}
-
-		// Actually, public symbols are in the SymRecordStream
-		if p.dbi.Header.SymRecordStream != 0xFFFF {
-			stream, err := p.msf.Stream(int(p.dbi.Header.SymRecordStream))
-			if err == nil && stream.Size() > 0 {
-				data, err := stream.ReadAll()
-				if err == nil {
-					symbols, _ := codeview.ParseSymbols(data)
-					for _, sym := range symbols {
-						if sym.Kind == codeview.S_PUB32 {
-							pub, err := codeview.ParsePubSym(sym.Data)
-							if err == nil {
-								p.publics = append(p.publics, PublicSymbol{
-									Name:    pub.Name,
-									Offset:  pub.Offset,
-									Segment: pub.Segment,
-								})
+				symbols, _ := codeview.ParseSymbols(data)
+				for _, sym := range symbols {
+					if sym.Kind == codeview.S_PUB32 {
+						pub, err := codeview.ParsePubSym(sym.Data)
+						if err == nil {
+							ps := PublicSymbol{
+								Name:    pub.Name,
+								Offset:  pub.Offset,
+								Segment: pub.Segment,
+								RVA:     p.SegmentToRVA(pub.Segment, pub.Offset),
 							}
+							if demangled := Demangle(pub.Name); demangled != pub.Name {
+								ps.DemangledName = demangled
+							}
+							p.publics = append(p.publics, ps)
 						}
 					}
 				}
@@ -473,4 +497,72 @@ func (p *PDB) TypeCount() int {
 		return 0
 	}
 	return p.tpi.NumTypes()
+}
+
+// Sections returns the PE section information.
+// Uses PE section headers when available (more accurate), falls back to section map.
+func (p *PDB) Sections() []SectionInfo {
+	if p.sections != nil {
+		return p.sections
+	}
+
+	p.sections = make([]SectionInfo, 0)
+
+	// Prefer PE section headers (from debug stream) if available
+	if len(p.sectionHeaders) > 0 {
+		for i, hdr := range p.sectionHeaders {
+			p.sections = append(p.sections, SectionInfo{
+				Index:  uint16(i + 1), // 1-based index
+				Name:   hdr.SectionName(),
+				Offset: hdr.VirtualAddress, // RVA base
+				Length: hdr.VirtualSize,
+			})
+		}
+		return p.sections
+	}
+
+	// Fall back to section map
+	if p.dbi == nil || len(p.dbi.SectionMap) == 0 {
+		return p.sections
+	}
+
+	for i, entry := range p.dbi.SectionMap {
+		// Skip entries with no length (often the first entry is a placeholder)
+		if entry.SectionLength == 0 && i == 0 {
+			continue
+		}
+		p.sections = append(p.sections, SectionInfo{
+			Index:  uint16(i + 1), // 1-based index
+			Offset: entry.Offset,
+			Length: entry.SectionLength,
+		})
+	}
+
+	return p.sections
+}
+
+// SegmentToRVA converts a segment:offset pair to an RVA (Relative Virtual Address).
+// Segment is 1-based (as used in PDB symbols).
+// Returns 0 if the segment is invalid or section headers are not available.
+func (p *PDB) SegmentToRVA(segment uint16, offset uint32) uint32 {
+	// Prefer PE section headers (from debug stream) if available
+	if len(p.sectionHeaders) > 0 {
+		if segment == 0 || int(segment) > len(p.sectionHeaders) {
+			return 0
+		}
+		return p.sectionHeaders[segment-1].VirtualAddress + offset
+	}
+
+	// Fall back to section map
+	if p.dbi == nil || len(p.dbi.SectionMap) == 0 {
+		return 0
+	}
+
+	// Segment is 1-based, so subtract 1 for index
+	if segment == 0 || int(segment) > len(p.dbi.SectionMap) {
+		return 0
+	}
+
+	entry := p.dbi.SectionMap[segment-1]
+	return entry.Offset + offset
 }

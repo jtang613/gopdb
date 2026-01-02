@@ -52,18 +52,15 @@ func main() {
 
 	// Helper for JSON output
 	outputJSON := func(v interface{}) {
-		var data []byte
-		var err error
+		encoder := json.NewEncoder(os.Stdout)
+		encoder.SetEscapeHTML(false) // Don't escape &, <, > as \u0026, \u003c, \u003e
 		if *prettyPrint {
-			data, err = json.MarshalIndent(v, "", "  ")
-		} else {
-			data, err = json.Marshal(v)
+			encoder.SetIndent("", "  ")
 		}
-		if err != nil {
+		if err := encoder.Encode(v); err != nil {
 			fmt.Fprintf(os.Stderr, "Error encoding JSON: %v\n", err)
 			os.Exit(1)
 		}
-		fmt.Println(string(data))
 	}
 
 	// Handle type lookup

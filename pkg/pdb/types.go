@@ -5,6 +5,7 @@ package pdb
 type Function struct {
 	Name          string `json:"name"`
 	DemangledName string `json:"demangled_name,omitempty"`
+	Prototype     string `json:"prototype,omitempty"`
 	Offset        uint32 `json:"offset"`
 	Segment       uint16 `json:"segment"`
 	RVA           uint32 `json:"rva"`
@@ -19,6 +20,7 @@ type Function struct {
 type Variable struct {
 	Name          string `json:"name"`
 	DemangledName string `json:"demangled_name,omitempty"`
+	Prototype     string `json:"prototype,omitempty"`
 	Offset        uint32 `json:"offset"`
 	Segment       uint16 `json:"segment"`
 	RVA           uint32 `json:"rva"`
@@ -49,6 +51,7 @@ type Member struct {
 type PublicSymbol struct {
 	Name          string `json:"name"`
 	DemangledName string `json:"demangled_name,omitempty"`
+	Prototype     string `json:"prototype,omitempty"`
 	Offset        uint32 `json:"offset"`
 	Segment       uint16 `json:"segment"`
 	RVA           uint32 `json:"rva"`

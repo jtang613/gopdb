@@ -4,32 +4,50 @@ import (
 	"strings"
 )
 
-// Demangle attempts to demangle an MSVC decorated name.
-// Returns the demangled name, or the original if demangling fails.
-func Demangle(name string) string {
+// DemangleResult contains the separated parts of a demangled name.
+type DemangleResult struct {
+	Name      string // The function/method name (e.g., "MyClass::MyMethod")
+	Prototype string // The function prototype (e.g., "void __cdecl(int, char*)")
+}
+
+// DemangleFull attempts to demangle an MSVC decorated name and returns
+// the name and prototype separately.
+func DemangleFull(name string) DemangleResult {
 	if name == "" {
-		return ""
+		return DemangleResult{}
 	}
 
 	// Check for MSVC C++ mangled name (starts with ?)
 	if strings.HasPrefix(name, "?") {
-		return demangleMSVC(name)
+		return demangleMSVCFull(name)
 	}
 
 	// Check for MSVC C decorated name (starts with _ and may end with @nn)
 	if strings.HasPrefix(name, "_") {
-		return demangleCDecl(name)
+		return DemangleResult{Name: demangleCDecl(name)}
 	}
 
 	// Check for __imp_ prefix (import thunk)
 	if strings.HasPrefix(name, "__imp_") {
-		inner := Demangle(name[6:])
-		if inner != name[6:] {
-			return inner + " [import]"
+		inner := DemangleFull(name[6:])
+		if inner.Name != "" {
+			inner.Name = inner.Name + " [import]"
+			return inner
 		}
 	}
 
-	return name
+	return DemangleResult{Name: name}
+}
+
+// Demangle attempts to demangle an MSVC decorated name.
+// Returns the demangled name, or the original if demangling fails.
+// For separate name and prototype, use DemangleFull instead.
+func Demangle(name string) string {
+	result := DemangleFull(name)
+	if result.Name == "" {
+		return name
+	}
+	return result.Name
 }
 
 // demangleCDecl handles simple C decorated names like _func@8
@@ -56,10 +74,10 @@ func demangleCDecl(name string) string {
 	return result
 }
 
-// demangleMSVC handles MSVC C++ mangled names
-func demangleMSVC(name string) string {
+// demangleMSVCFull handles MSVC C++ mangled names and returns name and prototype separately
+func demangleMSVCFull(name string) DemangleResult {
 	if len(name) < 2 || name[0] != '?' {
-		return name
+		return DemangleResult{Name: name}
 	}
 
 	d := &msvcDemangler{
@@ -68,11 +86,7 @@ func demangleMSVC(name string) string {
 		names: make([]string, 0),
 	}
 
-	result := d.demangle()
-	if result == "" {
-		return name
-	}
-	return result
+	return d.demangleFull()
 }
 
 type msvcDemangler struct {
@@ -81,25 +95,25 @@ type msvcDemangler struct {
 	names []string // Back-reference table
 }
 
-func (d *msvcDemangler) demangle() string {
+func (d *msvcDemangler) demangleFull() DemangleResult {
 	// Parse the qualified name
 	qualName := d.parseQualifiedName()
 	if qualName == "" {
-		return ""
+		return DemangleResult{}
 	}
 
 	// Check for type encoding
 	if d.pos >= len(d.input) {
-		return qualName
+		return DemangleResult{Name: qualName}
 	}
 
-	// Parse the type/encoding info
-	typeInfo := d.parseTypeEncoding()
+	// Parse the type/encoding info (prototype)
+	prototype := d.parseTypeEncoding()
 
-	if typeInfo != "" {
-		return typeInfo + " " + qualName
+	return DemangleResult{
+		Name:      qualName,
+		Prototype: prototype,
 	}
-	return qualName
 }
 
 func (d *msvcDemangler) parseQualifiedName() string {

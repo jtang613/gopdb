@@ -145,8 +145,9 @@ func (p *PDB) Functions() []Function {
 								TypeIndex: proc.TypeIndex,
 								IsGlobal:  codeview.IsGlobalSymbol(sym.Kind),
 							}
-							if demangled := Demangle(proc.Name); demangled != proc.Name {
-								fn.DemangledName = demangled
+							if demangled := DemangleFull(proc.Name); demangled.Name != proc.Name {
+								fn.DemangledName = demangled.Name
+								fn.Prototype = demangled.Prototype
 							}
 							if p.resolver != nil {
 								fn.Signature = p.resolver.ResolveType(proc.TypeIndex)
@@ -197,8 +198,9 @@ func (p *PDB) Functions() []Function {
 							IsGlobal:  codeview.IsGlobalSymbol(sym.Kind),
 							Module:    mod.ModuleName,
 						}
-						if demangled := Demangle(proc.Name); demangled != proc.Name {
-							fn.DemangledName = demangled
+						if demangled := DemangleFull(proc.Name); demangled.Name != proc.Name {
+							fn.DemangledName = demangled.Name
+							fn.Prototype = demangled.Prototype
 						}
 						if p.resolver != nil {
 							fn.Signature = p.resolver.ResolveType(proc.TypeIndex)
@@ -240,8 +242,9 @@ func (p *PDB) Variables() []Variable {
 								TypeIndex: dataSym.TypeIndex,
 								IsGlobal:  codeview.IsGlobalSymbol(sym.Kind),
 							}
-							if demangled := Demangle(dataSym.Name); demangled != dataSym.Name {
-								v.DemangledName = demangled
+							if demangled := DemangleFull(dataSym.Name); demangled.Name != dataSym.Name {
+								v.DemangledName = demangled.Name
+								v.Prototype = demangled.Prototype
 							}
 							if p.resolver != nil {
 								v.TypeName = p.resolver.ResolveType(dataSym.TypeIndex)
@@ -290,8 +293,9 @@ func (p *PDB) Variables() []Variable {
 							IsGlobal:  codeview.IsGlobalSymbol(sym.Kind),
 							Module:    mod.ModuleName,
 						}
-						if demangled := Demangle(dataSym.Name); demangled != dataSym.Name {
-							v.DemangledName = demangled
+						if demangled := DemangleFull(dataSym.Name); demangled.Name != dataSym.Name {
+							v.DemangledName = demangled.Name
+							v.Prototype = demangled.Prototype
 						}
 						if p.resolver != nil {
 							v.TypeName = p.resolver.ResolveType(dataSym.TypeIndex)
@@ -330,8 +334,9 @@ func (p *PDB) PublicSymbols() []PublicSymbol {
 								Segment: pub.Segment,
 								RVA:     p.SegmentToRVA(pub.Segment, pub.Offset),
 							}
-							if demangled := Demangle(pub.Name); demangled != pub.Name {
-								ps.DemangledName = demangled
+							if demangled := DemangleFull(pub.Name); demangled.Name != pub.Name {
+								ps.DemangledName = demangled.Name
+								ps.Prototype = demangled.Prototype
 							}
 							p.publics = append(p.publics, ps)
 						}
